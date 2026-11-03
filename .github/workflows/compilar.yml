@@ -3,6 +3,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   compilar:
     runs-on: windows-2022
@@ -42,7 +45,24 @@ jobs:
           cp papyrus/AesCaras.pex salida/Scripts/
           cp papyrus/AesCaras.psc salida/Source/Scripts/
 
+      - name: Comprobar exportaciones
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -like "*Hostx64\x64*" } | Select-Object -First 1
+          & $dumpbin.FullName /exports build/Release/AesCaras.dll
+
       - uses: actions/upload-artifact@v4
         with:
           name: AesCaras
           path: salida
+
+      - name: Publicar en Releases (AesCaras.zip)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path salida/* -DestinationPath AesCaras.zip -Force
+          $etiqueta = "v1.0.${{ github.run_number }}"
+          gh release create $etiqueta AesCaras.zip --title "AesCaras $etiqueta" --notes "Compilado de ${{ github.sha }}. Copiar SKSE y Scripts dentro de Data."
