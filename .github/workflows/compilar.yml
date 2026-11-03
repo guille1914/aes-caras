@@ -1,0 +1,48 @@
+name: Compilar AesCaras
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  compilar:
+    runs-on: windows-2022
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CommonLibSSE-NG (versión fija)
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/CharmedBaryon/CommonLibSSE-NG extern/CommonLibSSE-NG
+          git -C extern/CommonLibSSE-NG checkout b93280e832f263dbef44e44cbe2936622a02f91a
+
+      - name: vcpkg
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Configurar
+        shell: bash
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE="$RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+      - name: Compilar
+        shell: bash
+        run: cmake --build build --config Release --target AesCaras
+
+      - name: Preparar
+        shell: bash
+        run: |
+          mkdir -p salida/SKSE/Plugins salida/Scripts salida/Source/Scripts
+          cp build/Release/AesCaras.dll salida/SKSE/Plugins/
+          cp papyrus/AesCaras.pex salida/Scripts/
+          cp papyrus/AesCaras.psc salida/Source/Scripts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AesCaras
+          path: salida
