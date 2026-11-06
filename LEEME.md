@@ -10,5 +10,7 @@ demás salen sin color.
 - GitHub Actions lo compila en cada push: el resultado (`AesCaras.zip`, con `SKSE/Plugins/AesCaras.dll` y
   `Scripts/AesCaras.pex`) está en la pestaña Actions → la última ejecución → Artifacts.
 
+Funciones: `PintarCara` (caras), `Version` y, desde la v2, `SoltarTeclas` (arregla el «autowalk» al cerrar el chat).
+
 Instalación (modpack): `Data/SKSE/Plugins/AesCaras.dll` y `Data/Scripts/AesCaras.pex`. Necesita Address Library
 for SKSE Plugins (ya la usa SkyrimPlatform). El registro sale en `Documentos/My Games/Skyrim Special Edition/SKSE/AesCaras.log`.

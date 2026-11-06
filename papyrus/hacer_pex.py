@@ -12,7 +12,8 @@ print('ejemplo nativa', st[[fn for fn,f in o['states'][0][1] if f['fl']==3][0]],
 def fun(ret, params):
     return dict(ret=idx(ret), doc=idx(''), uf=0, fl=3, params=[(idx(a),idx(b)) for a,b in params], locals=[], ins=[])
 nuevas = [(idx('PintarCara'), fun('Int', [('akActor','Actor'),('asCapas','String')])),
-          (idx('Version'), fun('Int', []))]
+          (idx("Version"), fun("Int", [])),
+          (idx("SoltarTeclas"), fun("Int", []))]
 guardar = [(fn,f) for fn,f in o['states'][0][1] if st[fn] in (b'GetState', b'GotoState')]
 assert len(guardar)==2
 o['name'] = idx('AesCaras')

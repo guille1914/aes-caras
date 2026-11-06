@@ -6,3 +6,7 @@ Scriptname AesCaras Hidden
 Int Function PintarCara(Actor akActor, String asCapas) global native
 
 Int Function Version() global native
+
+; v2: suelta en el juego las teclas que Windows dice que ya no están pulsadas (autowalk al cerrar el chat).
+; Devuelve cuántas ha soltado, -1 si aún no hay teclado.
+Int Function SoltarTeclas() global native

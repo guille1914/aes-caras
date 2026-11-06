@@ -7,6 +7,7 @@
 // Papyrus (AesCaras.psc):
 //   Int Function PintarCara(Actor akActor, String asCapas) global native
 //   Int Function Version() global native
+//   Int Function SoltarTeclas() global native   (v2, ver más abajo)
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
 //          -1 actor nulo, -2 sin capas válidas, -3 su cabeza no usa el sombreado de cara, -4 no se pudo crear la textura.
@@ -17,6 +18,10 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include <cstring>
+
+// soltarTeclas1: para saber si una tecla está pulsada de verdad (user32).
+extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
+extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned int uCode, unsigned int uMapType);
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -26,7 +31,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 1;
+	constexpr std::int32_t kVersion = 2;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -201,10 +206,42 @@ namespace
 		return kVersion;
 	}
 
+	// soltarTeclas1 · «Autowalk» al abrir el chat de SkyMP andando. Mientras el navegador tiene el foco, SkyrimPlatform
+	// tira los eventos del teclado que iban al juego (DInputHook: GetDeviceData devuelve 0 eventos), y también el de
+	// soltar la W: el teclado del juego (BSWin32KeyboardDevice::curState) se queda con la W pulsada y el personaje
+	// sigue andando hasta que la vuelves a pulsar. Esto pone «suelta» en el juego cada tecla que Windows dice que ya
+	// no está pulsada. No inventa eventos (Input.ReleaseKey/TapKey de SKSE meten eventos falsos en el búfer de
+	// DirectInput y con SkyMP llegaron a romper el juego). Devuelve cuántas teclas ha soltado (-1 sin teclado).
+	std::int32_t SoltarTeclas(RE::StaticFunctionTag*)
+	{
+		auto* gestor = RE::BSInputDeviceManager::GetSingleton();
+		auto* teclado = gestor ? gestor->GetKeyboard() : nullptr;
+		if (!teclado)
+			return -1;
+		std::int32_t soltadas = 0;
+		for (unsigned int dik = 1; dik < 0x100; ++dik) {
+			if (!(teclado->curState[dik] & 0x80))
+				continue;
+			// DIK = código de escaneo; los de 0x80 en adelante son los extendidos (E0 xx).
+			const unsigned int escaneo = dik < 0x80 ? dik : (0xE000 | (dik & 0x7F));
+			const unsigned int vk = MapVirtualKeyW(escaneo, 3 /* MAPVK_VSC_TO_VK_EX */);
+			if (vk == 0)
+				continue;  // no sabemos qué tecla es: mejor no tocarla
+			if (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000)
+				continue;  // de verdad está pulsada
+			teclado->curState[dik] = 0;
+			++soltadas;
+		}
+		if (soltadas > 0)
+			SKSE::log::info("SoltarTeclas: {} tecla(s) que el juego creía pulsadas", soltadas);
+		return soltadas;
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
 		a_vm->RegisterFunction("Version"sv, "AesCaras"sv, Version);
+		a_vm->RegisterFunction("SoltarTeclas"sv, "AesCaras"sv, SoltarTeclas);
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -225,7 +262,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 1, 0, 0, 0 },
+	.Version = REL::Version{ 2, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,

@@ -15,7 +15,7 @@ add_subdirectory(extern/CommonLibSSE-NG EXCLUDE_FROM_ALL)
 find_package(spdlog CONFIG REQUIRED)
 
 add_library(AesCaras SHARED src/main.cpp)
-target_link_libraries(AesCaras PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog)
+target_link_libraries(AesCaras PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog user32)
 target_compile_definitions(AesCaras PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 if (MSVC)
 	target_compile_options(AesCaras PRIVATE /utf-8 /permissive- /Zc:preprocessor /EHsc)
