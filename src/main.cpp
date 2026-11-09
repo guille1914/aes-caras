@@ -35,7 +35,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 3;
+	constexpr std::int32_t kVersion = 4;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -250,7 +250,9 @@ namespace
 	// que trae CommonLibSSE-NG en la rama ng de alandtse/CommonLibVR).
 	constexpr REL::ID kQuitarHierbaCelda{ 15375 };   // void (BGSGrassManager*, TESObjectCELL*)
 	constexpr REL::ID kEncolarHierbaCelda{ 13277 };  // void (TESObjectCELL*)
+	constexpr REL::ID kCrearHierbaCelda{ 15372 };    // void (BGSGrassManager*, TESObjectCELL*, volatile bool* cancelar)
 	constexpr int     kMaxEsperas = 180;             // fotogramas esperando a que acabe la tarea que ya había (~3 s)
+	constexpr int     kComprobarTras = 90;           // hierba2: fotogramas tras encolar para ver si ha vuelto la hierba
 	constexpr float   kLadoCelda = 4096.0f;
 
 	// Se mira cada vez: al cargarse AesCaras puede que SKSE aún no haya cargado NGIO.
@@ -259,14 +261,63 @@ namespace
 		return GetModuleHandleW(L"NGIO-NG.dll") != nullptr;
 	}
 
+	// hierba2 · Diagnóstico: cuántos trozos de hierba tiene la celda y si hay una tarea de hierba en cola.
+	std::pair<std::size_t, bool> EstadoHierba(RE::TESObjectCELL* a_celda)
+	{
+		RE::BSSpinLockGuard tarea(a_celda->grassTaskLock);
+		auto* datos = a_celda->extraList.GetByType<RE::ExtraCellGrassData>();
+		if (!datos)
+			return { 0, false };
+		return { datos->grassHandles.size(), static_cast<bool>(datos->addGrassTask) };
+	}
+
+	int registros = 0;  // para no llenar el log: las 40 primeras celdas con detalle
+	bool Detalle() { return registros < 40; }
+
+	// hierba2 · Si la tarea encolada no ha vuelto a poner la hierba (la celda sigue sin trozos y sin tarea), se crea
+	// directamente con BGSGrassManager::AddCellGrass en el hilo principal. NGIO también la filtra ahí (CreatePatch).
+	void Comprobar(RE::FormID a_id, int a_fotograma)
+	{
+		auto* celda = RE::TESForm::LookupByID<RE::TESObjectCELL>(a_id);
+		auto* hierba = RE::BGSGrassManager::GetSingleton();
+		if (!celda || !hierba || !celda->IsAttached())
+			return;
+		auto [trozos, enCola] = EstadoHierba(celda);
+		if (enCola || (trozos == 0 && a_fotograma < kComprobarTras)) {
+			if (a_fotograma < kComprobarTras * 3)
+				SKSE::GetTaskInterface()->AddTask([a_id, a_fotograma]() { Comprobar(a_id, a_fotograma + 1); });
+			return;
+		}
+		if (trozos > 0) {
+			if (Detalle())
+				SKSE::log::info("RehacerHierba {:08X}: la tarea ha vuelto a poner la hierba ({} trozos, {} fotogramas)", a_id, trozos, a_fotograma);
+			++registros;
+			return;
+		}
+		volatile bool cancelar = false;
+		{
+			RE::BSSpinLockGuard crear(celda->grassCreateLock);
+			REL::Relocation<void (*)(RE::BGSGrassManager*, RE::TESObjectCELL*, volatile bool*)> crearHierba{ kCrearHierbaCelda };
+			crearHierba(hierba, celda, &cancelar);
+		}
+		auto [despues, _] = EstadoHierba(celda);
+		if (Detalle())
+			SKSE::log::info("RehacerHierba {:08X}: la tarea no la ha puesto; creada directamente ({} trozos)", a_id, despues);
+		++registros;
+	}
+
 	void RehacerCelda(RE::FormID a_id, int a_espera)
 	{
 		auto* celda = RE::TESForm::LookupByID<RE::TESObjectCELL>(a_id);
 		auto* tes = RE::TES::GetSingleton();
 		auto* hierba = RE::BGSGrassManager::GetSingleton();
 		if (!celda || !tes || !hierba || !hierba->enableGrass || celda->IsInteriorCell() || !celda->IsAttached() ||
-			celda->GetRuntimeData().worldSpace != tes->worldSpace)
+			celda->GetRuntimeData().worldSpace != tes->worldSpace) {
+			if (Detalle())
+				SKSE::log::info("RehacerHierba {:08X}: no se toca (celda {}, hierba {}, cargada {})", a_id, celda ? "sí" : "no",
+					hierba && hierba->enableGrass ? "activada" : "desactivada", celda && celda->IsAttached() ? "sí" : "no");
 			return;
+		}
 		{
 			RE::BSSpinLockGuard tarea(celda->grassTaskLock);
 			auto* datos = celda->extraList.GetByType<RE::ExtraCellGrassData>();
@@ -277,16 +328,23 @@ namespace
 				return;
 			}
 		}
+		const auto antes = EstadoHierba(celda).first;
 		{
 			RE::BSSpinLockGuard crear(celda->grassCreateLock);
 			REL::Relocation<void (*)(RE::BGSGrassManager*, RE::TESObjectCELL*)> quitar{ kQuitarHierbaCelda };
 			quitar(hierba, celda);
 		}
+		const auto quitada = EstadoHierba(celda).first;
 		{
 			RE::BSSpinLockGuard tarea(celda->grassTaskLock);
 			REL::Relocation<void (*)(RE::TESObjectCELL*)> encolar{ kEncolarHierbaCelda };
 			encolar(celda);
 		}
+		const auto [tras, enCola] = EstadoHierba(celda);
+		if (Detalle())
+			SKSE::log::info("RehacerHierba {:08X}: trozos antes {} · tras quitar {} · tras encolar {} · tarea en cola {}",
+				a_id, antes, quitada, tras, enCola ? "sí" : "no");
+		SKSE::GetTaskInterface()->AddTask([a_id]() { Comprobar(a_id, 1); });
 	}
 
 	// Las celdas exteriores cargadas (las de uGridsToLoad) cuyo cuadrado toca el círculo.
@@ -311,6 +369,8 @@ namespace
 					celdas.push_back(celda->GetFormID());
 			}
 		}
+		if (Detalle())
+			SKSE::log::info("RehacerHierba ({:.0f}, {:.0f}, r {:.0f}): {} celda(s) cargada(s) lo tocan", a_x, a_y, a_radio, celdas.size());
 		for (auto id : celdas)
 			RehacerCelda(id, 0);
 	}
@@ -355,7 +415,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 3, 0, 0, 0 },
+	.Version = REL::Version{ 4, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
