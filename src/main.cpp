@@ -35,7 +35,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 4;
+	constexpr std::int32_t kVersion = 5;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -311,11 +311,18 @@ namespace
 		auto* celda = RE::TESForm::LookupByID<RE::TESObjectCELL>(a_id);
 		auto* tes = RE::TES::GetSingleton();
 		auto* hierba = RE::BGSGrassManager::GetSingleton();
+		// hierba3: el mundo se compara con el del jugador (TES::worldSpace no cuadra en 1.6.1170: decía que no era el mismo).
+		auto* jugador = RE::PlayerCharacter::GetSingleton();
+		auto* mundo = jugador ? jugador->GetWorldspace() : nullptr;
 		if (!celda || !tes || !hierba || !hierba->enableGrass || celda->IsInteriorCell() || !celda->IsAttached() ||
-			celda->GetRuntimeData().worldSpace != tes->worldSpace) {
+			!mundo || celda->GetRuntimeData().worldSpace != mundo) {
 			if (Detalle())
-				SKSE::log::info("RehacerHierba {:08X}: no se toca (celda {}, hierba {}, cargada {})", a_id, celda ? "sí" : "no",
-					hierba && hierba->enableGrass ? "activada" : "desactivada", celda && celda->IsAttached() ? "sí" : "no");
+				SKSE::log::info("RehacerHierba {:08X}: no se toca (celda {}, hierba {}, cargada {}, interior {}, mundo de la celda {:08X}, del jugador {:08X})",
+					a_id, celda ? "sí" : "no", hierba && hierba->enableGrass ? "activada" : "desactivada",
+					celda && celda->IsAttached() ? "sí" : "no", celda && celda->IsInteriorCell() ? "sí" : "no",
+					celda && celda->GetRuntimeData().worldSpace ? celda->GetRuntimeData().worldSpace->GetFormID() : 0u,
+					mundo ? mundo->GetFormID() : 0u);
+			++registros;
 			return;
 		}
 		{
@@ -415,7 +422,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 4, 0, 0, 0 },
+	.Version = REL::Version{ 5, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
