@@ -8,6 +8,7 @@
 //   Int Function PintarCara(Actor akActor, String asCapas) global native
 //   Int Function Version() global native
 //   Int Function SoltarTeclas() global native   (v2, ver más abajo)
+//   Int Function RehacerHierba(Float afX, Float afY, Float afRadio) global native   (v3, hierba1, ver más abajo)
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
 //          -1 actor nulo, -2 sin capas válidas, -3 su cabeza no usa el sombreado de cara, -4 no se pudo crear la textura.
@@ -17,11 +18,14 @@
 
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include <algorithm>
 #include <cstring>
 
 // soltarTeclas1: para saber si una tecla está pulsada de verdad (user32).
 extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
 extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned int uCode, unsigned int uMapType);
+// hierba1: para saber si NGIO está cargado (kernel32).
+extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* lpModuleName);
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -31,7 +35,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 2;
+	constexpr std::int32_t kVersion = 3;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -237,11 +241,100 @@ namespace
 		return soltadas;
 	}
 
+	// hierba1 · La hierba atraviesa los huertos y muebles que pone el servidor: NGIO (NGIO-NG.dll) quita la hierba que
+	// choca con objetos, pero solo cuando el juego crea la hierba de la celda, y eso pasa antes de que lleguen los
+	// objetos del servidor. RehacerHierba(x, y, radio) quita la hierba de las celdas exteriores cargadas que toca ese
+	// círculo y vuelve a encolar su tarea de hierba; NGIO la intercepta, espera a que la colisión esté en el mundo y no
+	// pone la que choca. Sin NGIO no hace nada (solo daría un parpadeo). Devuelve 1 encolado, -1 sin NGIO.
+	// Address Library (AE): BGSGrassManager::RemoveCellGrass y AddCellGrassTask::CreateGrassLoadTaskForCell (las mismas
+	// que trae CommonLibSSE-NG en la rama ng de alandtse/CommonLibVR).
+	constexpr REL::ID kQuitarHierbaCelda{ 15375 };   // void (BGSGrassManager*, TESObjectCELL*)
+	constexpr REL::ID kEncolarHierbaCelda{ 13277 };  // void (TESObjectCELL*)
+	constexpr int     kMaxEsperas = 180;             // fotogramas esperando a que acabe la tarea que ya había (~3 s)
+	constexpr float   kLadoCelda = 4096.0f;
+
+	// Se mira cada vez: al cargarse AesCaras puede que SKSE aún no haya cargado NGIO.
+	bool HayNgio()
+	{
+		return GetModuleHandleW(L"NGIO-NG.dll") != nullptr;
+	}
+
+	void RehacerCelda(RE::FormID a_id, int a_espera)
+	{
+		auto* celda = RE::TESForm::LookupByID<RE::TESObjectCELL>(a_id);
+		auto* tes = RE::TES::GetSingleton();
+		auto* hierba = RE::BGSGrassManager::GetSingleton();
+		if (!celda || !tes || !hierba || !hierba->enableGrass || celda->IsInteriorCell() || !celda->IsAttached() ||
+			celda->GetRuntimeData().worldSpace != tes->worldSpace)
+			return;
+		{
+			RE::BSSpinLockGuard tarea(celda->grassTaskLock);
+			auto* datos = celda->extraList.GetByType<RE::ExtraCellGrassData>();
+			if (datos && datos->addGrassTask) {
+				// Ya tiene una tarea en cola (pudo encolarse antes de que llegara el objeto): otra vez luego.
+				if (a_espera < kMaxEsperas)
+					SKSE::GetTaskInterface()->AddTask([a_id, a_espera]() { RehacerCelda(a_id, a_espera + 1); });
+				return;
+			}
+		}
+		{
+			RE::BSSpinLockGuard crear(celda->grassCreateLock);
+			REL::Relocation<void (*)(RE::BGSGrassManager*, RE::TESObjectCELL*)> quitar{ kQuitarHierbaCelda };
+			quitar(hierba, celda);
+		}
+		{
+			RE::BSSpinLockGuard tarea(celda->grassTaskLock);
+			REL::Relocation<void (*)(RE::TESObjectCELL*)> encolar{ kEncolarHierbaCelda };
+			encolar(celda);
+		}
+	}
+
+	// Las celdas exteriores cargadas (las de uGridsToLoad) cuyo cuadrado toca el círculo.
+	void RehacerZona(float a_x, float a_y, float a_radio)
+	{
+		auto* tes = RE::TES::GetSingleton();
+		auto* rejilla = tes ? tes->gridCells : nullptr;
+		if (!rejilla)
+			return;
+		std::vector<RE::FormID> celdas;
+		for (std::uint32_t i = 0; i < rejilla->length; ++i) {
+			for (std::uint32_t j = 0; j < rejilla->length; ++j) {
+				auto* celda = rejilla->GetCell(i, j);
+				if (!celda || !celda->IsExteriorCell() || !celda->IsAttached())
+					continue;
+				auto* coord = celda->GetCoordinates();
+				if (!coord)
+					continue;
+				const float x0 = coord->cellX * kLadoCelda, y0 = coord->cellY * kLadoCelda;
+				const float cx = std::clamp(a_x, x0, x0 + kLadoCelda), cy = std::clamp(a_y, y0, y0 + kLadoCelda);
+				if ((cx - a_x) * (cx - a_x) + (cy - a_y) * (cy - a_y) <= a_radio * a_radio)
+					celdas.push_back(celda->GetFormID());
+			}
+		}
+		for (auto id : celdas)
+			RehacerCelda(id, 0);
+	}
+
+	std::int32_t RehacerHierba(RE::StaticFunctionTag*, float a_x, float a_y, float a_radio)
+	{
+		static bool avisado = false;
+		if (!avisado) {
+			avisado = true;
+			SKSE::log::info("RehacerHierba: NGIO {}", HayNgio() ? "cargado" : "no está (no se hace nada)");
+		}
+		if (!HayNgio())
+			return -1;
+		const float radio = std::clamp(a_radio, 0.0f, 8192.0f);
+		SKSE::GetTaskInterface()->AddTask([a_x, a_y, radio]() { RehacerZona(a_x, a_y, radio); });
+		return 1;
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
 		a_vm->RegisterFunction("Version"sv, "AesCaras"sv, Version);
 		a_vm->RegisterFunction("SoltarTeclas"sv, "AesCaras"sv, SoltarTeclas);
+		a_vm->RegisterFunction("RehacerHierba"sv, "AesCaras"sv, RehacerHierba);  // hierba1
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -262,7 +355,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 2, 0, 0, 0 },
+	.Version = REL::Version{ 3, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
