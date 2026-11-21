@@ -66,3 +66,16 @@ jobs:
           Compress-Archive -Path salida/* -DestinationPath AesCaras.zip -Force
           $etiqueta = "v1.0.${{ github.run_number }}"
           gh release create $etiqueta AesCaras.zip --title "AesCaras $etiqueta" --notes "Compilado de ${{ github.sha }}. Copiar SKSE y Scripts dentro de Data."
+
+      # hierba6 · La rama dev se publica aparte, como «pre-release» con la etiqueta fija «dev» (la baja solo el servidor de
+      # pruebas). Releases/latest sigue siendo lo de main (el servidor de verdad).
+      - name: Publicar para DEV (rama dev)
+        if: github.ref == 'refs/heads/dev'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path salida/* -DestinationPath AesCaras.zip -Force
+          gh release delete dev --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE = 0
+          gh release create dev AesCaras.zip --prerelease --target ${{ github.sha }} --title "AesCaras (DEV)" --notes "Prueba de la rama dev: ${{ github.sha }}."

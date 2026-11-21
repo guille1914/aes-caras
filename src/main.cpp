@@ -13,6 +13,7 @@
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
 //          -1 actor nulo, -2 sin capas válidas, -3 su cabeza no usa el sombreado de cara, -4 no se pudo crear la textura.
 
+#include <chrono>
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 
@@ -35,7 +36,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 5;
+	constexpr std::int32_t kVersion = 6;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -342,6 +343,28 @@ namespace
 			quitar(hierba, celda);
 		}
 		const auto quitada = EstadoHierba(celda).first;
+		// hierba6 · Se vuelve a crear en el mismo fotograma, sin dejar la celda sin hierba hasta que acabe la tarea (eso era
+		// el parpadeo). NGIO la filtra igual que en la tarea (CreatePatch), con los objetos ya puestos. Si no sale nada
+		// (la hierba aún no estaba lista), como antes: se encola la tarea y se comprueba.
+		{
+			const auto t0 = std::chrono::steady_clock::now();
+			volatile bool cancelar = false;
+			{
+				RE::BSSpinLockGuard crear(celda->grassCreateLock);
+				REL::Relocation<void (*)(RE::BGSGrassManager*, RE::TESObjectCELL*, volatile bool*)> crearHierba{ kCrearHierbaCelda };
+				crearHierba(hierba, celda, &cancelar);
+			}
+			const auto creada = EstadoHierba(celda).first;
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+			if (creada > 0 || antes == 0) {
+				if (Detalle())
+					SKSE::log::info("RehacerHierba {:08X}: trozos antes {} · tras quitar {} · creada al momento {} ({} ms)", a_id, antes, quitada, creada, ms);
+				++registros;
+				return;
+			}
+			if (Detalle())
+				SKSE::log::info("RehacerHierba {:08X}: al momento no ha salido ({} ms); se encola la tarea", a_id, ms);
+		}
 		{
 			RE::BSSpinLockGuard tarea(celda->grassTaskLock);
 			REL::Relocation<void (*)(RE::TESObjectCELL*)> encolar{ kEncolarHierbaCelda };
@@ -422,7 +445,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 5, 0, 0, 0 },
+	.Version = REL::Version{ 6, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
