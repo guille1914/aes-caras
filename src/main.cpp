@@ -10,6 +10,8 @@
 //   Int Function SoltarTeclas() global native   (v2, ver más abajo)
 //   Int Function RehacerHierba(Float afX, Float afY, Float afRadio) global native   (v3, hierba1, ver más abajo)
 //   Int Function GirarJugador(Float afGrados) global native   (v8, giro2, ver más abajo)
+//   Float Function CamaraLibre(Int aiDato) global native   (v9, camara1, ver más abajo)
+//   Int Function PonerCamaraLibre(Float afX, Float afY, Float afZ, Float afCabeceo, Float afRumbo) global native   (v9)
 // v7 (ajustes1): al arrancar, fija algunos ajustes de otros mods con lo que manda el servidor (AesAjustes.ini).
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
@@ -44,7 +46,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 8;
+	constexpr std::int32_t kVersion = 9;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -449,6 +451,52 @@ namespace
 		return 1;
 	}
 
+	// v9 (camara1): los encuadres del creador (cara, cuerpo, pies, entero) mueven la cámara libre (tfc), que Papyrus no
+	// deja tocar. CamaraLibre(dato) lee 0-2 la posición x, y, z, 3 el cabeceo y 4 el rumbo (en radianes, tal como los
+	// guarda el juego); -99999 si la cámara no está en modo libre. PonerCamaraLibre(x, y, z, cabeceo, rumbo) la coloca
+	// (en el hilo principal); devuelve 1 si lo ha encolado, 0 si la cámara no está en modo libre.
+	RE::FreeCameraState* CamaraLibreActual()
+	{
+		auto camara = RE::PlayerCamera::GetSingleton();
+		if (!camara || !camara->currentState || camara->currentState->id != RE::CameraState::kFree)
+			return nullptr;
+		return static_cast<RE::FreeCameraState*>(camara->currentState.get());
+	}
+
+	float CamaraLibre(RE::StaticFunctionTag*, std::int32_t a_dato)
+	{
+		auto libre = CamaraLibreActual();
+		if (!libre)
+			return -99999.0f;
+		switch (a_dato) {
+		case 0: return libre->translation.x;
+		case 1: return libre->translation.y;
+		case 2: return libre->translation.z;
+		case 3: return libre->rotation.x;
+		case 4: return libre->rotation.y;
+		default: return -99999.0f;
+		}
+	}
+
+	std::int32_t PonerCamaraLibre(RE::StaticFunctionTag*, float a_x, float a_y, float a_z, float a_cabeceo, float a_rumbo)
+	{
+		if (!CamaraLibreActual())
+			return 0;
+		static bool primera = true;
+		if (primera) {
+			primera = false;
+			SKSE::log::info("PonerCamaraLibre: primera llamada ({:.0f}, {:.0f}, {:.0f}; cabeceo {:.2f}, rumbo {:.2f})", a_x, a_y, a_z, a_cabeceo, a_rumbo);
+		}
+		SKSE::GetTaskInterface()->AddTask([a_x, a_y, a_z, a_cabeceo, a_rumbo]() {
+			if (auto libre = CamaraLibreActual()) {
+				libre->translation = RE::NiPoint3(a_x, a_y, a_z);
+				libre->rotation.x = a_cabeceo;
+				libre->rotation.y = a_rumbo;
+			}
+		});
+		return 1;
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
@@ -456,6 +504,8 @@ namespace
 		a_vm->RegisterFunction("SoltarTeclas"sv, "AesCaras"sv, SoltarTeclas);
 		a_vm->RegisterFunction("RehacerHierba"sv, "AesCaras"sv, RehacerHierba);  // hierba1
 		a_vm->RegisterFunction("GirarJugador"sv, "AesCaras"sv, GirarJugador);    // giro2
+		a_vm->RegisterFunction("CamaraLibre"sv, "AesCaras"sv, CamaraLibre);      // camara1
+		a_vm->RegisterFunction("PonerCamaraLibre"sv, "AesCaras"sv, PonerCamaraLibre);
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -644,7 +694,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 8, 0, 0, 0 },
+	.Version = REL::Version{ 9, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
