@@ -9,6 +9,7 @@
 //   Int Function Version() global native
 //   Int Function SoltarTeclas() global native   (v2, ver más abajo)
 //   Int Function RehacerHierba(Float afX, Float afY, Float afRadio) global native   (v3, hierba1, ver más abajo)
+// v7 (ajustes1): al arrancar, fija algunos ajustes de otros mods con lo que manda el servidor (AesAjustes.ini).
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
 //          -1 actor nulo, -2 sin capas válidas, -3 su cabeza no usa el sombreado de cara, -4 no se pudo crear la textura.
@@ -27,7 +28,12 @@ extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
 extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned int uCode, unsigned int uMapType);
 // hierba1: para saber si NGIO está cargado (kernel32).
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* lpModuleName);
+// ajustes1: la carpeta del juego (kernel32).
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameW(void* hModule, wchar_t* lpFilename, unsigned long nSize);
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,7 +42,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 6;
+	constexpr std::int32_t kVersion = 7;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -429,6 +435,174 @@ namespace
 		return true;
 	}
 
+	// ajustes1 · El servidor fija algunos ajustes de otros mods para todos los jugadores (la hierba de NGIO, el parallax
+	// de Community Shaders…). Los manda en Data/SKSE/Plugins/AesAjustes.ini, dentro del paquete del cliente; al
+	// arrancar el juego (antes de que esos mods lean sus archivos: SKSE carga los plugins por orden alfabético y
+	// AesCaras va primero) se cambian solo esas claves, el resto de cada archivo queda igual. Formato:
+	//   [Data/SKSE/Plugins/GrassControl.ini]                          ← un .ini: «clave = valor» (solo si la clave ya está)
+	//   Ray-cast-width-multiplier = 1.0
+	//   [Data/SKSE/Plugins/CommunityShaders/SettingsUser.json|Extended Materials]   ← un bloque de un .json
+	//   EnableParallax = 0
+	// Las rutas son desde la carpeta del juego (la del .exe). Si algo no cuadra, no se toca ese archivo (queda en el registro).
+	std::string Recortar(std::string a_t)
+	{
+		const auto ini = a_t.find_first_not_of(" \t\r\n");
+		if (ini == std::string::npos)
+			return {};
+		const auto fin = a_t.find_last_not_of(" \t\r\n");
+		return a_t.substr(ini, fin - ini + 1);
+	}
+
+	bool LeerArchivo(const std::filesystem::path& a_ruta, std::string& a_texto)
+	{
+		std::ifstream f(a_ruta, std::ios::binary);
+		if (!f)
+			return false;
+		std::ostringstream o;
+		o << f.rdbuf();
+		a_texto = o.str();
+		return true;
+	}
+
+	// En un .ini: cambia el valor de las líneas «clave = …» (sin añadir las que no están).
+	int CambiarIni(std::string& a_texto, const std::vector<std::pair<std::string, std::string>>& a_valores)
+	{
+		int cambios = 0;
+		std::size_t pos = 0;
+		while (pos < a_texto.size()) {
+			auto fin = a_texto.find('\n', pos);
+			if (fin == std::string::npos)
+				fin = a_texto.size();
+			auto lin = a_texto.substr(pos, fin - pos);
+			const auto igual = lin.find('=');
+			if (igual != std::string::npos) {
+				const auto clave = Recortar(lin.substr(0, igual));
+				for (const auto& [k, v] : a_valores) {
+					if (clave != k)
+						continue;
+					const bool cr = !lin.empty() && lin.back() == '\r';
+					auto actual = Recortar(lin.substr(igual + 1));
+					if (actual == v)
+						break;
+					const bool espacio = igual + 1 < lin.size() && (lin[igual + 1] == ' ' || lin[igual + 1] == '\t');
+					auto nueva = lin.substr(0, igual + 1) + (espacio ? " " : "") + v + (cr ? "\r" : "");
+					a_texto.replace(pos, fin - pos, nueva);
+					fin = pos + nueva.size();
+					++cambios;
+					break;
+				}
+			}
+			pos = fin + 1;
+		}
+		return cambios;
+	}
+
+	// En un .json: dentro del bloque "nombre": { … } cambia o añade «"clave": valor». -1 si no hay tal bloque.
+	int CambiarJson(std::string& a_texto, const std::string& a_bloque, const std::vector<std::pair<std::string, std::string>>& a_valores)
+	{
+		const auto nombre = a_texto.find("\"" + a_bloque + "\"");
+		if (nombre == std::string::npos)
+			return -1;
+		const auto abre = a_texto.find('{', nombre);
+		if (abre == std::string::npos)
+			return -1;
+		int cambios = 0;
+		for (const auto& [k, v] : a_valores) {
+			// el final del bloque (se busca cada vez: cambia al escribir)
+			int nivel = 0;
+			std::size_t cierra = std::string::npos;
+			for (auto i = abre; i < a_texto.size(); ++i) {
+				if (a_texto[i] == '{')
+					++nivel;
+				else if (a_texto[i] == '}' && --nivel == 0) {
+					cierra = i;
+					break;
+				}
+			}
+			if (cierra == std::string::npos)
+				return -1;
+			const auto clave = a_texto.find("\"" + k + "\"", abre);
+			if (clave != std::string::npos && clave < cierra) {
+				const auto dos = a_texto.find(':', clave);
+				auto ini = a_texto.find_first_not_of(" \t", dos + 1);
+				auto fin = a_texto.find_first_of(",}\r\n", ini);
+				if (dos == std::string::npos || ini == std::string::npos || fin == std::string::npos || fin > cierra)
+					continue;
+				while (fin > ini && (a_texto[fin - 1] == ' ' || a_texto[fin - 1] == '\t'))
+					--fin;
+				if (a_texto.substr(ini, fin - ini) == v)
+					continue;
+				a_texto.replace(ini, fin - ini, v);
+			} else {
+				const bool vacio = Recortar(a_texto.substr(abre + 1, cierra - abre - 1)).empty();
+				a_texto.insert(abre + 1, "\n        \"" + k + "\": " + v + (vacio ? "\n    " : ","));
+			}
+			++cambios;
+		}
+		return cambios;
+	}
+
+	void AplicarAjustes()
+	{
+		try {
+			wchar_t exe[1024]{};
+			if (!GetModuleFileNameW(nullptr, exe, 1024))
+				return;
+			const auto juego = std::filesystem::path(exe).parent_path();
+			const auto plugins = juego / "Data" / "SKSE" / "Plugins";
+			std::string conf;
+			if (!LeerArchivo(plugins / "AesAjustes.ini", conf)) {
+				SKSE::log::info("ajustes: no hay AesAjustes.ini (no se toca nada)");
+				return;
+			}
+			struct Grupo { std::string archivo, bloque; std::vector<std::pair<std::string, std::string>> valores; };
+			std::vector<Grupo> grupos;
+			std::istringstream lineas(conf);
+			for (std::string l; std::getline(lineas, l);) {
+				l = Recortar(l);
+				if (l.empty() || l[0] == ';' || l[0] == '#')
+					continue;
+				if (l.front() == '[' && l.back() == ']') {
+					auto dentro = l.substr(1, l.size() - 2);
+					const auto barra = dentro.find('|');
+					grupos.push_back({ Recortar(dentro.substr(0, barra)), barra == std::string::npos ? "" : Recortar(dentro.substr(barra + 1)), {} });
+					continue;
+				}
+				const auto igual = l.find('=');
+				if (igual != std::string::npos && !grupos.empty())
+					grupos.back().valores.emplace_back(Recortar(l.substr(0, igual)), Recortar(l.substr(igual + 1)));
+			}
+			for (const auto& g : grupos) {
+				const auto ruta = juego / std::filesystem::path(g.archivo);
+				if (g.archivo.find("..") != std::string::npos) {
+					SKSE::log::info("ajustes: {}: ruta no válida", g.archivo);
+					continue;
+				}
+				std::string texto;
+				if (!LeerArchivo(ruta, texto)) {
+					SKSE::log::info("ajustes: {}: no está (no se toca)", g.archivo);
+					continue;
+				}
+				const int n = g.bloque.empty() ? CambiarIni(texto, g.valores) : CambiarJson(texto, g.bloque, g.valores);
+				if (n < 0) {
+					SKSE::log::info("ajustes: {}: no tiene el bloque «{}» (no se toca)", g.archivo, g.bloque);
+					continue;
+				}
+				if (n == 0) {
+					SKSE::log::info("ajustes: {}: ya estaba", g.archivo);
+					continue;
+				}
+				std::ofstream f(ruta, std::ios::binary | std::ios::trunc);
+				f << texto;
+				SKSE::log::info("ajustes: {}: {} valor(es) cambiado(s){}", g.archivo, n, f ? "" : " (¡no se ha podido escribir!)");
+			}
+		} catch (const std::exception& e) {
+			SKSE::log::error("ajustes: error: {}", e.what());
+		} catch (...) {
+			SKSE::log::error("ajustes: error");
+		}
+	}
+
 	void IniciarRegistro()
 	{
 		auto carpeta = SKSE::log::log_directory();
@@ -445,7 +619,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 6, 0, 0, 0 },
+	.Version = REL::Version{ 7, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
@@ -456,6 +630,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	SKSE::Init(a_skse);
 	IniciarRegistro();
 	SKSE::log::info("AesCaras {} cargado (juego {})", kVersion, REL::Module::get().version().string());
+	AplicarAjustes();  // ajustes1: antes que nada (y antes de que los otros plugins lean sus archivos)
 	if (REL::Module::IsSE() || REL::Module::IsVR()) {
 		SKSE::log::error("solo funciona con Skyrim AE (1.6.x)");
 		return true;
