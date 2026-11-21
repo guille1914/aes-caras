@@ -14,3 +14,7 @@ Int Function SoltarTeclas() global native
 ; v3 (hierba1): rehace la hierba de las celdas exteriores cargadas que toca el círculo (afX, afY, afRadio), para que
 ; NGIO quite la que atraviesa los objetos del servidor. Devuelve 1 si lo ha encolado, -1 si NGIO no está.
 Int Function RehacerHierba(Float afX, Float afY, Float afRadio) global native
+
+; v8 (giro2): gira al jugador a afGrados (rumbo, en grados) sin el «salto» de SetAngle, como al girar con el ratón.
+; El creador de personaje lo llama en cada fotograma. Devuelve 1 si lo ha encolado, 0 si aún no hay jugador.
+Int Function GirarJugador(Float afGrados) global native

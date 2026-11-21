@@ -11,6 +11,8 @@ demás salen sin color.
   `Scripts/AesCaras.pex`) está en la pestaña Actions → la última ejecución → Artifacts.
 
 Funciones: `PintarCara` (caras), `Version` y, desde la v2, `SoltarTeclas` (arregla el «autowalk» al cerrar el chat).
+v8 (rama dev): `GirarJugador` (el creador gira al personaje sin el tirón de SetAngle). Para añadir una nativa al
+.pex: `python3 papyrus/anadir_nativa.py papyrus/AesCaras.pex Nombre TipoDevuelto param:Tipo ...`.
 
 Instalación (modpack): `Data/SKSE/Plugins/AesCaras.dll` y `Data/Scripts/AesCaras.pex`. Necesita Address Library
 for SKSE Plugins (ya la usa SkyrimPlatform). El registro sale en `Documentos/My Games/Skyrim Special Edition/SKSE/AesCaras.log`.
