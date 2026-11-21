@@ -9,6 +9,7 @@
 //   Int Function Version() global native
 //   Int Function SoltarTeclas() global native   (v2, ver más abajo)
 //   Int Function RehacerHierba(Float afX, Float afY, Float afRadio) global native   (v3, hierba1, ver más abajo)
+//   Int Function GirarJugador(Float afGrados) global native   (v6, giro2, ver más abajo)
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
 //          -1 actor nulo, -2 sin capas válidas, -3 su cabeza no usa el sombreado de cara, -4 no se pudo crear la textura.
@@ -27,6 +28,7 @@ extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned 
 // hierba1: para saber si NGIO está cargado (kernel32).
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* lpModuleName);
 #include <mutex>
+#include <numbers>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,7 +37,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 5;
+	constexpr std::int32_t kVersion = 6;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -396,12 +398,35 @@ namespace
 		return 1;
 	}
 
+	// v6 (giro2): el creador de personaje giraba al jugador con SetAngle de Papyrus, que para el motor es un «salto»
+	// (como un teletransporte): rehace físicas y el juego se congela un instante. GirarJugador(grados) solo cambia el
+	// rumbo, como cuando el jugador gira con el ratón (Actor::SetRotationZ), en el hilo principal del juego. El creador
+	// lo llama en cada fotograma con un ángulo que avanza poco a poco, y el giro se ve suave.
+	// Devuelve 1 si lo ha encolado, 0 si aún no hay jugador.
+	std::int32_t GirarJugador(RE::StaticFunctionTag*, float a_grados)
+	{
+		if (!RE::PlayerCharacter::GetSingleton())
+			return 0;
+		const float radianes = a_grados * (std::numbers::pi_v<float> / 180.0f);
+		static bool primera = true;
+		if (primera) {
+			primera = false;
+			SKSE::log::info("GirarJugador: primera llamada ({:.1f} grados)", a_grados);
+		}
+		SKSE::GetTaskInterface()->AddTask([radianes]() {
+			if (auto jugador = RE::PlayerCharacter::GetSingleton())
+				jugador->SetRotationZ(radianes);
+		});
+		return 1;
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
 		a_vm->RegisterFunction("Version"sv, "AesCaras"sv, Version);
 		a_vm->RegisterFunction("SoltarTeclas"sv, "AesCaras"sv, SoltarTeclas);
 		a_vm->RegisterFunction("RehacerHierba"sv, "AesCaras"sv, RehacerHierba);  // hierba1
+		a_vm->RegisterFunction("GirarJugador"sv, "AesCaras"sv, GirarJugador);    // giro2
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -422,7 +447,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 5, 0, 0, 0 },
+	.Version = REL::Version{ 6, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
