@@ -12,7 +12,7 @@ demás salen sin color.
 
 Funciones: `PintarCara` (caras), `Version` y, desde la v2, `SoltarTeclas` (arregla el «autowalk» al cerrar el chat).
 v8 (rama dev): `GirarJugador` (el creador gira al personaje sin el tirón de SetAngle). v9: `CamaraLibre` y
-`PonerCamaraLibre` (encuadres del creador). Para añadir una nativa al
+`PonerCamaraLibre` (encuadres del creador). v10: `LeerPortapapeles` (pegar en el creador). Para añadir una nativa al
 .pex: `python3 papyrus/anadir_nativa.py papyrus/AesCaras.pex Nombre TipoDevuelto param:Tipo ...`.
 
 Instalación (modpack): `Data/SKSE/Plugins/AesCaras.dll` y `Data/Scripts/AesCaras.pex`. Necesita Address Library

@@ -12,6 +12,7 @@
 //   Int Function GirarJugador(Float afGrados) global native   (v8, giro2, ver más abajo)
 //   Float Function CamaraLibre(Int aiDato) global native   (v9, camara1, ver más abajo)
 //   Int Function PonerCamaraLibre(Float afX, Float afY, Float afZ, Float afCabeceo, Float afRumbo) global native   (v9)
+//   String Function LeerPortapapeles() global native   (v10, pegar1, ver más abajo)
 // v7 (ajustes1): al arrancar, fija algunos ajustes de otros mods con lo que manda el servidor (AesAjustes.ini).
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
@@ -28,6 +29,16 @@
 
 // soltarTeclas1: para saber si una tecla está pulsada de verdad (user32).
 extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
+// pegar1: el portapapeles de Windows (declarados a mano, como GetAsyncKeyState; si ya vino Windows.h, se usan los suyos)
+#ifndef _WINUSER_
+extern "C" __declspec(dllimport) int __stdcall OpenClipboard(void* hWndNewOwner);
+extern "C" __declspec(dllimport) int __stdcall CloseClipboard();
+extern "C" __declspec(dllimport) void* __stdcall GetClipboardData(unsigned int uFormat);
+#endif
+#ifndef _WINBASE_
+extern "C" __declspec(dllimport) void* __stdcall GlobalLock(void* hMem);
+extern "C" __declspec(dllimport) int __stdcall GlobalUnlock(void* hMem);
+#endif
 extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned int uCode, unsigned int uMapType);
 // hierba1: para saber si NGIO está cargado (kernel32).
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* lpModuleName);
@@ -46,7 +57,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 9;
+	constexpr std::int32_t kVersion = 10;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -497,6 +508,46 @@ namespace
 		return 1;
 	}
 
+	// v10 (pegar1): el navegador del juego no deja leer el portapapeles (navigator.clipboard falla), así que Ctrl+V y
+	// el botón «Pegar» del creador lo leen aquí: el texto copiado en Windows (CF_UNICODETEXT), en UTF-8, como mucho
+	// 200 caracteres; "" si no hay texto o no se puede abrir.
+	RE::BSFixedString LeerPortapapeles(RE::StaticFunctionTag*)
+	{
+		std::string texto;
+		if (!OpenClipboard(nullptr))
+			return RE::BSFixedString(texto.c_str());
+		if (void* datos = GetClipboardData(13)) {  // CF_UNICODETEXT
+			if (auto w = static_cast<const wchar_t*>(GlobalLock(datos))) {
+				for (std::size_t i = 0, n = 0; w[i] && n < 200; ++i, ++n) {
+					std::uint32_t c = static_cast<std::uint16_t>(w[i]);
+					if (c >= 0xD800 && c <= 0xDBFF && w[i + 1] >= 0xDC00 && w[i + 1] <= 0xDFFF) {
+						c = 0x10000 + ((c - 0xD800) << 10) + (static_cast<std::uint16_t>(w[i + 1]) - 0xDC00);
+						++i;
+					}
+					if (c < 0x20 || (c >= 0xD800 && c <= 0xDFFF)) c = ' ';  // saltos de línea y sueltos: espacio
+					if (c < 0x80) {
+						texto += static_cast<char>(c);
+					} else if (c < 0x800) {
+						texto += static_cast<char>(0xC0 | (c >> 6));
+						texto += static_cast<char>(0x80 | (c & 0x3F));
+					} else if (c < 0x10000) {
+						texto += static_cast<char>(0xE0 | (c >> 12));
+						texto += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+						texto += static_cast<char>(0x80 | (c & 0x3F));
+					} else {
+						texto += static_cast<char>(0xF0 | (c >> 18));
+						texto += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+						texto += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+						texto += static_cast<char>(0x80 | (c & 0x3F));
+					}
+				}
+				GlobalUnlock(datos);
+			}
+		}
+		CloseClipboard();
+		return RE::BSFixedString(texto.c_str());
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
@@ -506,6 +557,7 @@ namespace
 		a_vm->RegisterFunction("GirarJugador"sv, "AesCaras"sv, GirarJugador);    // giro2
 		a_vm->RegisterFunction("CamaraLibre"sv, "AesCaras"sv, CamaraLibre);      // camara1
 		a_vm->RegisterFunction("PonerCamaraLibre"sv, "AesCaras"sv, PonerCamaraLibre);
+		a_vm->RegisterFunction("LeerPortapapeles"sv, "AesCaras"sv, LeerPortapapeles);  // pegar1
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -694,7 +746,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 9, 0, 0, 0 },
+	.Version = REL::Version{ 10, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,

@@ -23,3 +23,6 @@ Int Function GirarJugador(Float afGrados) global native
 ; 4 rumbo (radianes del juego); -99999 si no está en modo libre. PonerCamaraLibre: 1 encolado, 0 si no está en libre.
 Float Function CamaraLibre(Int aiDato) global native
 Int Function PonerCamaraLibre(Float afX, Float afY, Float afZ, Float afCabeceo, Float afRumbo) global native
+
+; v10 (pegar1): el texto copiado en Windows (para Ctrl+V y el botón «Pegar» del creador); "" si no hay.
+String Function LeerPortapapeles() global native
