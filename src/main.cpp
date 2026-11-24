@@ -59,7 +59,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 11;
+	constexpr std::int32_t kVersion = 12;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -566,11 +566,36 @@ namespace
 		}
 		static inline REL::Relocation<decltype(GetFreeRotationMode)> _original;
 
+		// v12: con solo lo de arriba el caballo seguía girando hacia la cámara. Ahora el giro del ratón (izquierda y
+		// derecha) va a la «rotación libre» de la cámara y no al caballo; el arriba y abajo lo sigue haciendo el juego.
+		static void HandleLookInput(RE::HorseCameraState* a_this, const RE::NiPoint2& a_input)
+		{
+			if (!gCaballoLibre.load(std::memory_order_relaxed)) {
+				_mirar(a_this, a_input);
+				return;
+			}
+			const RE::NiPoint2 soloArribaAbajo{ 0.0f, a_input.y };
+			_mirar(a_this, soloArribaAbajo);
+			constexpr float pi = std::numbers::pi_v<float>;
+			float x = a_this->freeRotation.x + a_input.x;
+			while (x > pi) x -= 2.0f * pi;
+			while (x < -pi) x += 2.0f * pi;
+			a_this->freeRotation.x = x;
+			a_this->freeRotationEnabled = true;
+			static int avisos = 0;
+			if (avisos < 5 && (a_input.x != 0.0f)) {
+				++avisos;
+				SKSE::log::info("caballo1: ratón {:.4f} → cámara libre {:.3f} rad", a_input.x, x);
+			}
+		}
+		static inline REL::Relocation<decltype(HandleLookInput)> _mirar;
+
 		static void Instalar()
 		{
 			REL::Relocation<std::uintptr_t> tabla{ RE::VTABLE_HorseCameraState[0] };
 			_original = tabla.write_vfunc(0x0C, GetFreeRotationMode);
-			SKSE::log::info("caballo1: gancho de la cámara de montura puesto");
+			_mirar = tabla.write_vfunc(0x0F, HandleLookInput);
+			SKSE::log::info("caballo1: gancho de la cámara de montura puesto (v12: también el ratón)");
 		}
 	};
 
@@ -782,7 +807,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 11, 0, 0, 0 },
+	.Version = REL::Version{ 12, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
