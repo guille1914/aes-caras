@@ -13,6 +13,7 @@
 //   Float Function CamaraLibre(Int aiDato) global native   (v9, camara1, ver más abajo)
 //   Int Function PonerCamaraLibre(Float afX, Float afY, Float afZ, Float afCabeceo, Float afRumbo) global native   (v9)
 //   String Function LeerPortapapeles() global native   (v10, pegar1, ver más abajo)
+//   Int Function CaballoCamaraLibre(Int aiActivo) global native   (v11, caballo1, ver más abajo)
 // v7 (ajustes1): al arrancar, fija algunos ajustes de otros mods con lo que manda el servidor (AesAjustes.ini).
 // asCapas: "tipo|argb|ruta;tipo|argb|ruta;..." (argb en decimal, con o sin signo).
 // Devuelve: 2 pintada ahora, 1 ya estaba pintada con esas capas, 0 su cabeza aún no está (reintentar),
@@ -44,6 +45,7 @@ extern "C" __declspec(dllimport) unsigned int __stdcall MapVirtualKeyW(unsigned 
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* lpModuleName);
 // ajustes1: la carpeta del juego (kernel32).
 extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameW(void* hModule, wchar_t* lpFilename, unsigned long nSize);
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -57,7 +59,7 @@ using namespace std::literals;
 
 namespace
 {
-	constexpr std::int32_t kVersion = 10;
+	constexpr std::int32_t kVersion = 11;
 
 	// Address Library (AE). Mismas que Skyrim Together (y SkyMP para ApplyMasksToRenderTargets / BSRenderManager).
 	constexpr REL::ID kCrearTextura{ 70717 };       // NiRenderedTexture* (BSFixedString&)
@@ -548,6 +550,39 @@ namespace
 		return RE::BSFixedString(texto.c_str());
 	}
 
+	// v11 (caballo1) · A caballo, la cámara va libre (como en RDR2): el ratón mueve solo la cámara y el caballo se lleva
+	// con W / S / A / D. Skyrim ya lo hace así a caballo con el arma desenvainada (modo de «rotación libre» de la cámara
+	// de montura); aquí se le dice que esté siempre en ese modo mientras CaballoCamaraLibre(1). Se cambia una sola
+	// función del juego (HorseCameraState::GetFreeRotationMode, la 0x0C de su tabla); con 0 vuelve a lo de siempre.
+	std::atomic<bool> gCaballoLibre{ false };
+
+	struct GanchoCamaraCaballo
+	{
+		static bool GetFreeRotationMode(const RE::HorseCameraState* a_this)
+		{
+			if (gCaballoLibre.load(std::memory_order_relaxed))
+				return true;
+			return _original(a_this);
+		}
+		static inline REL::Relocation<decltype(GetFreeRotationMode)> _original;
+
+		static void Instalar()
+		{
+			REL::Relocation<std::uintptr_t> tabla{ RE::VTABLE_HorseCameraState[0] };
+			_original = tabla.write_vfunc(0x0C, GetFreeRotationMode);
+			SKSE::log::info("caballo1: gancho de la cámara de montura puesto");
+		}
+	};
+
+	// Devuelve la versión del plugin (para saber que la función existe).
+	std::int32_t CaballoCamaraLibre(RE::StaticFunctionTag*, std::int32_t a_activo)
+	{
+		const bool activo = a_activo != 0;
+		if (gCaballoLibre.exchange(activo) != activo)
+			SKSE::log::info("caballo1: cámara libre a caballo {}", activo ? "encendida" : "apagada");
+		return kVersion;
+	}
+
 	bool Registrar(RE::BSScript::IVirtualMachine* a_vm)
 	{
 		a_vm->RegisterFunction("PintarCara"sv, "AesCaras"sv, PintarCara);
@@ -558,6 +593,7 @@ namespace
 		a_vm->RegisterFunction("CamaraLibre"sv, "AesCaras"sv, CamaraLibre);      // camara1
 		a_vm->RegisterFunction("PonerCamaraLibre"sv, "AesCaras"sv, PonerCamaraLibre);
 		a_vm->RegisterFunction("LeerPortapapeles"sv, "AesCaras"sv, LeerPortapapeles);  // pegar1
+		a_vm->RegisterFunction("CaballoCamaraLibre"sv, "AesCaras"sv, CaballoCamaraLibre);  // caballo1
 		SKSE::log::info("funciones registradas");
 		return true;
 	}
@@ -746,7 +782,7 @@ namespace
 }
 
 SKSEPluginInfo(
-	.Version = REL::Version{ 10, 0, 0, 0 },
+	.Version = REL::Version{ 11, 0, 0, 0 },
 	.Name = "AesCaras"sv,
 	.Author = "Aestherius"sv,
 	.StructCompatibility = SKSE::StructCompatibility::Independent,
@@ -763,5 +799,6 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 		return true;
 	}
 	SKSE::GetPapyrusInterface()->Register(Registrar);
+	GanchoCamaraCaballo::Instalar();  // caballo1
 	return true;
 }

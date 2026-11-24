@@ -26,3 +26,7 @@ Int Function PonerCamaraLibre(Float afX, Float afY, Float afZ, Float afCabeceo, 
 
 ; v10 (pegar1): el texto copiado en Windows (para Ctrl+V y el botón «Pegar» del creador); "" si no hay.
 String Function LeerPortapapeles() global native
+
+; v11 (caballo1): a caballo, cámara libre (el ratón solo mueve la cámara; el caballo con W/S/A/D). 1 encender, 0 apagar.
+; Devuelve la versión del plugin.
+Int Function CaballoCamaraLibre(Int aiActivo) global native
